@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Join Game - Mobile Client</title>
+    
+    <!-- Load React -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+    
+    <!-- Load Tailwind CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+
+    <!-- Load Inter font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.4; }
+            50% { transform: scale(1.5); opacity: 0.2; }
+            100% { transform: scale(1); opacity: 0.4; }
+        }
+
+        .animate-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Get WebSocket URL from current window location
+        function getWebSocketUrl() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            return `${protocol}//${window.location.host}`;
+        }
+
+        // App Component
+        const App = () => {
+            const [username, setUsername] = React.useState('');
+            const [joined, setJoined] = React.useState(false);
+            const [games, setGames] = React.useState([]);
+            const [error, setError] = React.useState('');
+            const [wsStatus, setWsStatus] = React.useState('disconnected');
+            const [ws, setWs] = React.useState(null);
+            const [currentGame, setCurrentGame] = React.useState(null);
+
+            const handleJoin = async (e) => {
+                e.preventDefault();
+                if (!username.trim()) {
+                    setError('Please enter a username');
+                    return;
+                }
+
+                try {
+                    const wsUrl = await getWebSocketUrl();
+                    const newWs = new WebSocket(wsUrl);
+                    
+                    newWs.onopen = () => {
+                        setWsStatus('connected');
+                        newWs.send(JSON.stringify({
+                            type: 'join',
+                            username: username.trim()
+                        }));
+                        setJoined(true);
+                        setWs(newWs);
+                    };
+
+                    newWs.onmessage = (event) => {
+    try {
+        const data = JSON.parse(event.data);
+        console.log('Received WebSocket message:', data);
+        
+        switch (data.type) {
+            case 'gameList':
+                console.log('Updating games list:', data.games);
+                setGames(data.games);
+                break;
+                
+                case 'gameJoined':
+    console.log('Game joined message received:', data);
+    if (data.gameId) {
+        // Find the game in our list of available games
+        const selectedGame = games.find(g => g.id === data.gameId);
+        console.log('Found selected game:', selectedGame);
+        
+        if (selectedGame) {
+            const gameState = {
+                id: data.gameId,
+                name: selectedGame.name,
+                players: data.players || [],
+                status: 'waiting',
+                maxPlayers: selectedGame.maxPlayers
+            };
+            console.log('Setting current game to:', gameState);
+            setCurrentGame(gameState);
+        } else {
+            // If we can't find the game, create a basic game state from the server data
+            console.log('Creating game state from server data');
+            setCurrentGame({
+                id: data.gameId,
+                name: data.gameId, // Use the ID as name if we don't have the game info
+                players: data.players || [],
+                status: 'waiting',
+                maxPlayers: 8 // Default for Poker
+            });
+        }
+    } else {
+        console.error('Received gameJoined without gameId:', data);
+    }
+    break;
+
+            case 'gameStarting':
+                setCurrentGame(prev => ({
+                    ...prev,
+                    status: 'starting'
+                }));
+                break;
+
+            case 'gameStarted':
+                setCurrentGame(prev => ({
+                    ...prev,
+                    status: 'active'
+                }));
+                break;
+
+            case 'gameRedirect':
+                console.log('Redirecting to:', data.url);
+                window.location.href = data.url;
+                break;
+
+            case 'error':
+                console.error('Server error:', data.message);
+                setError(data.message);
+                break;
+
+            default:
+                console.log('Unhandled message type:', data.type);
+        }
+    } catch (err) {
+        console.error('Error processing message:', err);
+        setError('Error processing server message');
+    }
+};
+
+                    newWs.onclose = () => {
+                        setWsStatus('disconnected');
+                        setError('Connection lost. Please refresh the page.');
+                    };
+
+                    newWs.onerror = () => {
+                        setWsStatus('error');
+                        setError('Failed to connect to game server');
+                    };
+                } catch (err) {
+                    setError('Failed to connect to game server');
+                }
+            };
+
+            React.useEffect(() => {
+                return () => {
+                    if (ws) {
+                        ws.close();
+                    }
+                };
+            }, [ws]);
+
+            const selectGame = (gameId) => {
+    if (!ws || wsStatus !== 'connected') {
+        setError('Connection lost. Please refresh the page.');
+        return;
+    }
+
+    console.log('Attempting to select game:', gameId);
+    
+    try {
+        ws.send(JSON.stringify({
+            type: 'selectGame',
+            gameId: gameId
+        }));
+    } catch (err) {
+        console.error('Error sending game selection:', err);
+        setError('Failed to select game');
+    }
+};
+
+            const startGame = () => {
+                if (ws && wsStatus === 'connected' && currentGame) {
+                    ws.send(JSON.stringify({
+                        type: 'startGame',
+                        gameId: currentGame.id
+                    }));
+                }
+            };
+
+            const leaveGame = () => {
+                if (ws && wsStatus === 'connected') {
+                    // Send null gameId to indicate leaving current game
+                    ws.send(JSON.stringify({
+                        type: 'selectGame',
+                        gameId: null
+                    }));
+                    // Clear current game state immediately for better UX
+                    setCurrentGame(null);
+                    // Clear any existing errors
+                    setError('');
+                }
+            };
+
+            // Join Page
+            if (!joined) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 text-gray-100 p-6">
+                        <div className="max-w-md mx-auto">
+                            <h1 className="text-4xl font-bold mb-8 text-center bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-500">
+                                Join Game
+                            </h1>
+                            
+                            <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl p-6 border border-gray-700/50">
+                                <form onSubmit={handleJoin} className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2 text-gray-300">
+                                            Your Name
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={username}
+                                            onChange={(e) => {
+                                                setUsername(e.target.value);
+                                                setError('');
+                                            }}
+                                            className="w-full p-3 rounded-xl bg-gray-900/50 border border-gray-700/50
+                                                     focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500
+                                                     text-black"
+                                            placeholder="Enter your name"
+                                            maxLength={20}
+                                            autoFocus
+                                        />
+                                    </div>
+                                    
+                                    {error && (
+                                        <div className="bg-red-500/10 border border-red-500/50 rounded-xl p-3">
+                                            <p className="text-red-400 text-sm">{error}</p>
+                                        </div>
+                                    )}
+                                    
+                                    <button
+                                        type="submit"
+                                        className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold
+                                                 py-3 px-4 rounded-xl transition-colors text-lg"
+                                    >
+                                        Join Game
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // Game View
+            if (currentGame) {
+                const isGameStarting = currentGame.status === 'starting';
+                const isGameActive = currentGame.status === 'active';
+
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 text-gray-100 p-6">
+                        <div className="max-w-md mx-auto">
+                            <div className="flex justify-between items-center mb-6">
+                                <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-500">
+                                    {currentGame.name}
+                                </h1>
+                                <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${
+                                    wsStatus === 'connected' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                                }`}>
+                                    <span className="text-sm font-medium capitalize">{wsStatus}</span>
+                                </div>
+                            </div>
+
+                            <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl p-6 border border-gray-700/50 mb-4">
+                                <h2 className="text-xl font-semibold mb-4">Players in Game</h2>
+                                <div className="space-y-2">
+                                    {currentGame.players.map(player => (
+                                        <div 
+                                            key={player.id}
+                                            className="flex items-center gap-3 p-3 bg-gray-900/30 rounded-lg"
+                                        >
+                                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                                            <span className="font-medium">{player.name}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="mt-4 text-center text-gray-400">
+                                    {currentGame.players.length} players joined
+                                </div>
+                            </div>
+
+                            <div className="space-y-3">
+                                {!isGameActive && !isGameStarting && (
+                                    <>
+                                        <button
+                                            onClick={startGame}
+                                            className="w-full bg-indigo-500 hover:bg-indigo-600 text-white 
+                                                     font-bold py-3 px-4 rounded-xl transition-colors"
+                                        >
+                                            Start Game
+                                        </button>
+                                        <button
+                                            onClick={leaveGame}
+                                            className="w-full bg-red-500/20 hover:bg-red-500/30 text-red-400 
+                                                     font-bold py-3 px-4 rounded-xl transition-colors border border-red-500/50"
+                                        >
+                                            Leave Game
+                                        </button>
+                                    </>
+                                )}
+
+                                {isGameStarting && (
+                                    <div className="text-center p-4 bg-indigo-500/20 text-indigo-400 rounded-xl border border-indigo-500/50 animate-pulse">
+                                        Game is starting...
+                                    </div>
+                                )}
+
+                                {isGameActive && (
+                                    <div className="text-center p-4 bg-green-500/20 text-green-400 rounded-xl border border-green-500/50">
+                                        Game is in progress!
+                                    </div>
+                                )}
+                            </div>
+
+                            {error && (
+                                <div className="mt-4 bg-red-500/10 border border-red-500/50 rounded-xl p-3">
+                                    <p className="text-red-400 text-sm">{error}</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            // Game Selection View
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 text-gray-100 p-6">
+                    <div className="max-w-md mx-auto">
+                        <div className="flex justify-between items-center mb-6">
+                            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-500">
+                                Welcome, {username}!
+                            </h1>
+                            <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${
+                                wsStatus === 'connected' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                            }`}>
+                                <span className="text-sm font-medium capitalize">{wsStatus}</span>
+                            </div>
+                        </div>
+
+                        {games.length === 0 ? (
+                            <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl p-6 border border-gray-700/50 text-center">
+                                <div className="animate-pulse">
+                                    <p className="text-gray-400">Waiting for available games...</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                <p className="text-gray-400 mb-4">Select a game to join:</p>
+                                {games.map(game => (
+                                    <button
+                                        key={game.id}
+                                        className="w-full bg-gray-800/50 backdrop-blur-xl p-6 rounded-2xl
+                                                 border border-gray-700/50 hover:border-indigo-500/50 
+                                                 transition-colors focus:outline-none disabled:opacity-50
+                                                 disabled:cursor-not-allowed disabled:hover:border-gray-700/50"
+                                        onClick={() => selectGame(game.id)}
+                                        disabled={game.status !== 'waiting'}
+                                    >
+                                        <div className="flex justify-between items-center">
+                                            <h3 className="font-bold text-lg">{game.name}</h3>
+                                            <div className="flex items-center gap-3">
+                                                <span className={`px-3 py-1 rounded-full text-sm ${
+                                                    game.status === 'waiting' ? 'bg-green-500/20 text-green-400' :
+                                                    game.status === 'starting' ? 'bg-blue-500/20 text-blue-400' :
+                                                    'bg-gray-500/20 text-gray-400'
+                                                }`}>
+                                                    {game.status}
+                                                </span>
+                                                <span className="text-gray-400">
+                                                    {game.players} / {game.maxPlayers}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className="mt-4 w-full bg-gray-700/30 rounded-full h-2">
+                                            <div 
+                                                className="bg-indigo-500 h-2 rounded-full transition-all"
+                                                style={{ width: `${(game.players / game.maxPlayers) * 100}%` }}
+                                            />
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        {error && (
+                            <div className="mt-4 bg-red-500/10 border border-red-500/50 rounded-xl p-3">
+                                <p className="text-red-400 text-sm">{error}</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
